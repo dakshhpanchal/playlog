@@ -1,0 +1,4 @@
+# Local-only files (never commit personal data)
+main.html
+*.backup.json
+playlog-backup*.json
