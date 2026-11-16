@@ -101,6 +101,17 @@
   .pl-bar i { display: block; height: 100%; background: var(--pen); }
   .side-empty { padding: 8px 12px; color: var(--ink-3); font-size: 14px; }
 
+  .acct { display: flex; align-items: flex-start; gap: 10px; width: calc(100% - 10px); margin-top: 8px; padding: 8px 10px; border-radius: 8px; text-align: left; font-size: 13px; color: var(--ink-3); }
+  .acct:hover { background: rgba(127, 127, 127, .1); }
+  [hidden] { display: none !important; }
+  .acct > span:last-child { min-width: 0; }
+  .acct b { display: block; font-weight: 500; font-size: 14px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .acct .dot { width: 8px; height: 8px; margin-top: 7px; border-radius: 50%; flex-shrink: 0; background: var(--rule-2); }
+  .acct.synced .dot { background: var(--pen); }
+  .acct.syncing .dot, .acct.connecting .dot { background: var(--marker); }
+  .acct.error .dot { background: var(--danger); }
+  .acct.error small { color: var(--danger); }
+  .acct small { font-size: 13px; }
   .side-foot { display: flex; gap: 4px; padding: 10px 10px 0 0; }
   .side-foot .btn:first-child { flex: 1; justify-content: flex-start; }
 
@@ -273,6 +284,15 @@
   .drop.show { display: grid; }
   .drop div { padding: 40px 56px; border: 2px dashed rgba(255,255,255,.7); border-radius: 14px; pointer-events: none; }
 
+  /* Account dialog */
+  .dlg .alt { font-size: 14px; color: var(--ink-2); margin-top: 4px; }
+  .link { color: var(--pen); font-weight: 500; text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--pen) 35%, transparent); text-underline-offset: 3px; }
+  .link:hover { text-decoration-color: currentColor; }
+  .acct-who { margin-top: 18px; padding: 14px 16px; border-radius: 10px; background: var(--desk); font-size: 14px; color: var(--ink-2); }
+  .acct-who b { display: block; font-size: 16px; font-weight: 500; color: var(--ink); overflow-wrap: anywhere; }
+  .status.ok { color: var(--ink); }
+  .dlg-acts .grow { flex: 1; }
+
   .scrim { display: none; }
 
   /* ---------- Small screens ---------- */
@@ -329,6 +349,7 @@
   <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></symbol>
   <symbol id="i-up" viewBox="0 0 24 24"><path d="m6 15 6-6 6 6"/></symbol>
   <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
   <symbol id="i-stack" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></symbol>
 </svg>
 
@@ -336,6 +357,7 @@
   <aside class="side" aria-label="Playlists">
     <a class="logo" href="#" data-act="home"><span class="logo-mark" aria-hidden="true"><i></i><i></i><i></i></span>playlog</a>
     <nav class="side-nav" id="side-nav"></nav>
+    <button class="acct" id="acct" data-act="account" hidden><span class="dot"></span><span><b id="acct-name">Sign in to sync</b><small id="acct-state">Sync across your devices</small></span></button>
     <div class="side-foot">
       <button class="btn btn-quiet" data-act="new-group"><svg class="i"><use href="#i-plus"/></svg>New playlist</button>
       <button class="btn btn-quiet btn-icon" data-act="app-menu" aria-label="Settings and backup" title="Settings and backup"><svg class="i"><use href="#i-more"/></svg></button>
@@ -426,8 +448,38 @@
   </form>
 </dialog>
 
+<dialog id="dlg-account" style="width:min(430px, calc(100vw - 24px))">
+  <form class="dlg" id="form-account" novalidate>
+    <h2 id="dac-title">Sign in</h2>
+    <p class="sub" id="dac-sub"></p>
+    <div id="dac-out">
+      <div class="field">
+        <label for="dac-email">Email</label>
+        <input class="input" id="dac-email" type="email" autocomplete="username" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="dac-pass">Password</label>
+        <input class="input" id="dac-pass" type="password" autocomplete="current-password">
+        <div class="hint" id="dac-hint"></div>
+      </div>
+      <p class="alt" id="dac-alt"></p>
+    </div>
+    <div id="dac-in" hidden>
+      <div class="acct-who">Signed in as<b id="dac-who"></b><span id="dac-when"></span></div>
+    </div>
+    <div class="status" id="dac-status"><div class="spin" id="dac-spin"></div><span id="dac-msg"></span></div>
+    <div class="dlg-acts">
+      <button type="button" class="btn btn-quiet" id="dac-signout" hidden>Sign out</button>
+      <span class="grow"></span>
+      <button type="button" class="btn btn-quiet" data-close id="dac-cancel">Cancel</button>
+      <button type="submit" class="btn btn-pen" id="dac-submit">Sign in</button>
+    </div>
+  </form>
+</dialog>
+
 <noscript><p style="padding:40px">playlog needs JavaScript.</p></noscript>
 
+<script src="sync-config.js"></script>
 <script>
 'use strict';
 /* playlog: data lives only in this browser's localStorage under `watchlist_v2`. */
@@ -464,8 +516,17 @@ function normalizeData(d) {
 function loadJSON(k, fb) { try { return JSON.parse(localStorage.getItem(k)) ?? fb; } catch { return fb; } }
 let data = normalizeData(loadJSON(STORE, null));
 let prefs = Object.assign({ active: null }, loadJSON(PREFS, {}));
-function save() { try { localStorage.setItem(STORE, JSON.stringify(data)); } catch { toast('Changes could not be saved. Browser storage is full or blocked.'); } }
+function persist() { try { localStorage.setItem(STORE, JSON.stringify(data)); } catch { toast('Changes could not be saved. Browser storage is full or blocked.'); } }
+function save() { persist(); sync.meta.localAt = Date.now(); saveMeta(); schedulePush(); }
 function savePrefs() { try { localStorage.setItem(PREFS, JSON.stringify(prefs)); } catch {} }
+
+/* Sync state. `localAt` is when this device last changed the data, `remoteAt` the
+   version this device last saw on (or sent to) the server, `uid` the account it belongs to. */
+const SYNC_META = 'playlog_sync';
+const sync = { fb: null, user: null, ref: null, unsub: null, timer: 0, state: 'off', msg: '', meta: null };
+function loadMeta() { sync.meta = Object.assign({ uid: null, localAt: 0, remoteAt: 0, device: uid() + uid() }, loadJSON(SYNC_META, {})); }
+function saveMeta() { try { localStorage.setItem(SYNC_META, JSON.stringify(sync.meta)); } catch {} }
+loadMeta(); saveMeta();
 
 let activeId = data.groups.some(g => g.id === prefs.active) ? prefs.active : null;
 let filter = 'all', sortMode = 'index', searchQ = '';
@@ -830,6 +891,7 @@ function groupMenu(from) {
 function appMenu(from) {
   const dark = document.documentElement.dataset.theme === 'dark';
   openMenu(from, [
+    ...(sync.fb ? [{ id: 'account', icon: 'user', label: sync.user ? 'Account and sync' : 'Sign in to sync', run: openAccount }, '-'] : []),
     { id: 'export', icon: 'download', label: 'Download a backup', run: exportData },
     { id: 'import', icon: 'upload', label: 'Import a backup', run: () => $('#import-file').click() },
     '-',
@@ -1009,6 +1071,223 @@ async function fetchPlaylist(list) {
   throw new Error('The playlist could not be loaded. Check that it is public, or paste the video links instead.');
 }
 
+/* ---------- Account and sync ----------
+   Optional. Turned on by putting a Firebase web config in sync-config.js. The whole
+   library is stored as one document per account at users/{uid}; the security rules in
+   firestore.rules only let a signed-in user read and write their own document. */
+const FIREBASE_SDK = 'https://www.gstatic.com/firebasejs/10.14.1/';
+
+function setSync(state, msg = '') {
+  sync.state = state; sync.msg = msg;
+  const el = $('#acct'); el.className = 'acct ' + state;
+  const email = sync.user?.email;
+  $('#acct-name').textContent = email || (state === 'connecting' ? 'Connecting' : state === 'error' ? 'Sync unavailable' : 'Sign in to sync');
+  $('#acct-state').textContent = {
+    connecting: 'Connecting to sync…',
+    out: 'Sync across your devices',
+    syncing: 'Syncing…',
+    synced: 'All changes synced',
+    error: 'Not synced. Saved on this device.',
+  }[state] || '';
+  if ($('#dlg-account').open && acctView === 'in') fillSignedIn();
+}
+
+async function initSync() {
+  const cfg = window.PLAYLOG_FIREBASE;
+  if (!cfg || !cfg.apiKey) return;
+  $('#acct').hidden = false; setSync('connecting');
+  try {
+    const [app, A, F] = await Promise.all(['app', 'auth', 'firestore'].map(m => import(`${FIREBASE_SDK}firebase-${m}.js`)));
+    const a = app.initializeApp(cfg);
+    sync.fb = { A, F, auth: A.getAuth(a), db: F.getFirestore(a) };
+    A.onAuthStateChanged(sync.fb.auth, onUser);
+  } catch (e) {
+    console.warn('playlog sync', e);
+    setSync('error', 'The sync service could not be reached.');
+  }
+}
+
+function onUser(user) {
+  sync.unsub?.(); sync.unsub = null; clearTimeout(sync.timer);
+  sync.user = user; sync.ref = null;
+  if (!user) return setSync('out');
+  setSync('syncing');
+  const { F, db } = sync.fb;
+  sync.ref = F.doc(db, 'users', user.uid);
+  sync.unsub = F.onSnapshot(sync.ref,
+    snap => onRemote(snap).catch(e => { console.warn('playlog sync', e); setSync('error', e.message); }),
+    e => { console.warn('playlog sync', e); setSync('error', e.code === 'permission-denied' ? 'The database rules do not allow this account to sync.' : e.message); });
+}
+
+async function onRemote(snap) {
+  if (snap.metadata?.hasPendingWrites || !sync.user) return;
+  const m = sync.meta, r = snap.exists() ? snap.data() : null;
+  let remote = null;
+  if (r && typeof r.data === 'string') { try { remote = normalizeData(JSON.parse(r.data)); } catch {} }
+  const at = +r?.updatedAt || 0;
+
+  // First sync of this account on this device: combine what's here with what's in the account.
+  if (m.uid !== sync.user.uid) {
+    m.uid = sync.user.uid;
+    if (!remote || !remote.groups.length) { m.remoteAt = 0; return push(); }
+    if (!data.groups.length) return adopt(remote, at);
+    data = mergeData(remote, data); persist(); m.localAt = Date.now(); saveMeta(); render();
+    toast(`Combined the playlists on this device with the ones in your account.`);
+    return push();
+  }
+  if (!remote) return push();
+  if (r.device === m.device && at <= m.localAt) {          // our own write coming back
+    if (at > m.remoteAt) { m.remoteAt = at; saveMeta(); }
+    return setSync(m.localAt > m.remoteAt ? 'syncing' : 'synced');
+  }
+  if (at > m.remoteAt) {
+    if (m.localAt > m.remoteAt) {                         // changed here and elsewhere since the last sync
+      data = mergeData(remote, data); persist(); m.localAt = Date.now(); m.remoteAt = at; saveMeta(); render();
+      return push();
+    }
+    return adopt(remote, at);
+  }
+  if (m.localAt > m.remoteAt) return push();
+  setSync('synced');
+}
+
+function adopt(remote, at) {
+  data = remote; persist();
+  Object.assign(sync.meta, { localAt: at, remoteAt: at }); saveMeta();
+  if (activeId && !getGroup(activeId)) activeId = null;
+  render(); setSync('synced');
+}
+
+/* Union of two libraries by id. Order and names follow `a`; a video counts as watched
+   if it was watched in either. Only used when both sides changed independently. */
+function mergeData(a, b) {
+  const out = structuredClone(a);
+  for (const gb of b.groups) {
+    const ga = out.groups.find(g => g.id === gb.id);
+    if (!ga) { out.groups.push(structuredClone(gb)); continue; }
+    for (const vb of gb.videos) {
+      const va = ga.videos.find(v => v.id === vb.id);
+      if (!va) { ga.videos.push(structuredClone(vb)); continue; }
+      if (vb.done && !va.done) { va.done = true; if (vb.watchedAt) va.watchedAt = vb.watchedAt; }
+      if (!va.duration && vb.duration) va.duration = vb.duration;
+      if (!va._ytTitle && vb._ytTitle) va._ytTitle = vb._ytTitle;
+      if (!va.author && vb.author) va.author = vb.author;
+    }
+  }
+  return out;
+}
+
+function schedulePush() {
+  if (!sync.ref) return;
+  clearTimeout(sync.timer); setSync('syncing');
+  sync.timer = setTimeout(push, 700);
+}
+async function push() {
+  clearTimeout(sync.timer);
+  if (!sync.ref) return;
+  const m = sync.meta, at = m.localAt || Date.now(), ref = sync.ref;
+  setSync('syncing');
+  try {
+    await sync.fb.F.setDoc(ref, { data: JSON.stringify(data), updatedAt: at, device: m.device });
+    if (ref !== sync.ref) return;
+    if (at > m.remoteAt) { m.remoteAt = at; saveMeta(); }
+    setSync(m.localAt > m.remoteAt ? 'syncing' : 'synced');
+  } catch (e) {
+    console.warn('playlog sync', e);
+    setSync('error', e.code === 'permission-denied' ? 'The database rules do not allow this account to sync.' : 'Your changes could not be synced.');
+  }
+}
+
+/* Account dialog: 'in' (signed in), 'signin' or 'signup'. */
+let acctView = 'signin';
+const AUTH_ERRORS = {
+  'auth/invalid-credential': 'That email and password don’t match an account.',
+  'auth/invalid-login-credentials': 'That email and password don’t match an account.',
+  'auth/wrong-password': 'That email and password don’t match an account.',
+  'auth/user-not-found': 'That email and password don’t match an account.',
+  'auth/email-already-in-use': 'There’s already an account with this email. Sign in instead.',
+  'auth/weak-password': 'Use a password with at least 6 characters.',
+  'auth/invalid-email': 'Enter a valid email address.',
+  'auth/missing-password': 'Enter your password.',
+  'auth/too-many-requests': 'Too many attempts. Wait a few minutes, then try again.',
+  'auth/network-request-failed': 'Couldn’t reach the sign-in service. Check your connection.',
+  'auth/operation-not-allowed': 'New accounts are turned off for this site.',
+  'auth/admin-restricted-operation': 'New accounts are turned off for this site.',
+};
+function acctStatus(msg, kind = 'busy') {
+  $('#dac-status').className = msg ? 'status show' + (kind === 'err' ? ' err' : kind === 'ok' ? ' ok' : '') : 'status';
+  $('#dac-msg').textContent = msg || ''; $('#dac-spin').style.display = kind === 'busy' ? '' : 'none';
+}
+function fillSignedIn() {
+  $('#dac-who').textContent = sync.user?.email || '';
+  $('#dac-when').textContent = {
+    synced: 'Your playlists are saved to your account. Changes sync to every device you’re signed in on.',
+    syncing: 'Syncing your changes…',
+    error: `Not synced: ${sync.msg} Your changes are saved on this device and will sync when this is fixed.`,
+  }[sync.state] || '';
+}
+function showAcct(view) {
+  acctView = view;
+  const signup = view === 'signup', inn = view === 'in';
+  $('#dac-out').hidden = inn; $('#dac-in').hidden = !inn;
+  $('#dac-signout').hidden = !inn; $('#dac-cancel').hidden = inn;
+  $('#dac-title').textContent = inn ? 'Your account' : signup ? 'Create an account' : 'Sign in';
+  $('#dac-sub').textContent = inn ? '' : signup
+    ? 'Your playlists on this device are saved to the new account. Sign in with it on your other devices to see them there.'
+    : 'Sign in to sync your playlists between your devices.';
+  $('#dac-sub').hidden = inn;
+  $('#dac-submit').textContent = inn ? 'Done' : signup ? 'Create account' : 'Sign in';
+  $('#dac-pass').autocomplete = signup ? 'new-password' : 'current-password';
+  $('#dac-hint').innerHTML = signup ? 'At least 6 characters.' : '<button type="button" class="link" id="dac-forgot">Forgot your password?</button>';
+  $('#dac-alt').innerHTML = signup
+    ? 'Already have an account? <button type="button" class="link" data-view="signin">Sign in</button>'
+    : 'No account yet? <button type="button" class="link" data-view="signup">Create one</button>';
+  if (inn) fillSignedIn();
+  acctStatus('');
+}
+function openAccount() {
+  document.body.classList.remove('nav');
+  if (!sync.fb) return toast(sync.state === 'error' ? 'Sync is unavailable right now. Your playlists are saved on this device.' : 'Connecting to sync…');
+  showAcct(sync.user ? 'in' : 'signin');
+  $('#dac-pass').value = '';
+  $('#dlg-account').showModal();
+  if (!sync.user) ($('#dac-email').value ? $('#dac-pass') : $('#dac-email')).focus();
+}
+$('#form-account').addEventListener('click', async e => {
+  const v = e.target.closest('[data-view]');
+  if (v) { showAcct(v.dataset.view); $('#dac-email').focus(); return; }
+  if (e.target.id === 'dac-forgot') {
+    const email = $('#dac-email').value.trim();
+    if (!email) { acctStatus('Enter your email first, then choose Forgot your password.', 'err'); return $('#dac-email').focus(); }
+    acctStatus('Sending a reset link…');
+    try { await sync.fb.A.sendPasswordResetEmail(sync.fb.auth, email); acctStatus(`If ${email} has an account, a reset link is on its way. Check your inbox and spam folder.`, 'ok'); }
+    catch (err) { acctStatus(AUTH_ERRORS[err.code] || 'The reset link could not be sent.', 'err'); }
+  }
+});
+$('#form-account').addEventListener('submit', async e => {
+  e.preventDefault();
+  if (acctView === 'in') return $('#dlg-account').close();
+  const email = $('#dac-email').value.trim(), pass = $('#dac-pass').value, signup = acctView === 'signup';
+  if (!email) { acctStatus('Enter your email.', 'err'); return $('#dac-email').focus(); }
+  if (!pass) { acctStatus('Enter your password.', 'err'); return $('#dac-pass').focus(); }
+  $('#dac-submit').disabled = true;
+  acctStatus(signup ? 'Creating your account…' : 'Signing in…');
+  try {
+    const { A, auth } = sync.fb;
+    await (signup ? A.createUserWithEmailAndPassword : A.signInWithEmailAndPassword)(auth, email, pass);
+    $('#dlg-account').close();
+    toast(signup ? 'Account created. Your playlists now sync.' : `Signed in as ${email}.`);
+  } catch (err) {
+    acctStatus(AUTH_ERRORS[err.code] || `That didn’t work (${err.code || err.message}).`, 'err');
+  } finally { $('#dac-submit').disabled = false; }
+});
+$('#dac-signout').addEventListener('click', async () => {
+  $('#dlg-account').close();
+  sync.meta.uid = null; saveMeta();
+  try { await sync.fb.A.signOut(sync.fb.auth); toast('Signed out. Your playlists stay on this device.'); }
+  catch { toast('Sign-out failed. Try again.'); }
+});
+
 /* ---------- Events ---------- */
 document.addEventListener('click', e => {
   if (menu.classList.contains('open') && !e.target.closest('#menu, [data-act$="menu"]')) closeMenu();
@@ -1032,6 +1311,7 @@ document.addEventListener('click', e => {
     'clear-filters': () => { filter = 'all'; searchQ = ''; render(); },
     'group-menu': () => groupMenu(el),
     'app-menu': () => appMenu(el),
+    account: openAccount,
     theme: flipTheme,
     import: () => $('#import-file').click(),
     'open-nav': () => document.body.classList.add('nav'),
@@ -1064,6 +1344,7 @@ document.addEventListener('keydown', e => {
   if (f) { e.preventDefault(); f(); }
 });
 addEventListener('storage', e => {
+  if (e.key === SYNC_META) return loadMeta();
   if (e.key !== STORE) return;
   data = normalizeData(loadJSON(STORE, null));
   if (activeId && !getGroup(activeId)) activeId = null;
@@ -1071,6 +1352,7 @@ addEventListener('storage', e => {
 });
 
 render(true);
+initSync();
 </script>
 </body>
 </html>

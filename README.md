@@ -12,15 +12,38 @@ Each playlist has a **reel**: one block per video, sized by its length. Blue blo
 
 <sub>Screenshots use made-up demo data.</sub>
 
-## Your data stays on your device
+## Your data and sync
 
-There is no server, account or database. Your playlists are saved in your browser's `localStorage` and never leave your device. The public site only serves the app's code. When someone else opens it, they start with an empty app in their own browser and can't see your playlists.
+There's no playlog server. By default your playlists are saved in your browser's `localStorage` and never leave your device. The public site only serves the app's code, so other people who open it start with an empty app and can't see your playlists.
+
+To use the same playlists on several devices, you can turn on **sign-in with an email and password**. Accounts and data are stored in a free [Firebase](https://firebase.google.com/) project that you own. Each account's playlists are saved as a single document, and the rules in [`firestore.rules`](firestore.rules) only let that account read or write it. The app keeps working offline and syncs when it reconnects.
+
+Without sync, use **⋯ → Download a backup** and **Import a backup** (or drag the file onto the page) to move playlists between devices. Clearing the browser's site data deletes playlists that aren't synced.
 
 The app sends YouTube video IDs to public metadata services, but only when it's looking up titles and lengths (see below).
 
-Because the data lives in one browser:
-- To move it to another browser or device, use **⋯ → Download a backup**, then **Import a backup** on the other one. You can also drag the backup file onto the page.
-- Clearing the browser's site data deletes your playlists, so keep a backup.
+### Turn on sync (about 5 minutes)
+
+1. Go to the [Firebase console](https://console.firebase.google.com/) and click **Create a project**. You can turn off Google Analytics.
+2. Open **Build → Authentication → Get started**. Under **Sign-in method**, enable **Email/Password**.
+3. Open **Build → Firestore Database → Create database**. Pick a location and start in **production mode**.
+4. In Firestore, open the **Rules** tab, replace the rules with the contents of `firestore.rules`, and click **Publish**.
+5. Open **Project settings** (the gear icon). Under **Your apps**, click the web icon (`</>`) and register an app. Firebase shows a `firebaseConfig` object.
+6. Paste that object into `sync-config.js`:
+   ```js
+   window.PLAYLOG_FIREBASE = {
+     apiKey: "…",
+     authDomain: "….firebaseapp.com",
+     projectId: "…",
+     appId: "…",
+   };
+   ```
+   Commit and push the file. These values only identify the project and are safe to publish. The security rules protect the data.
+7. Open playlog, click **Sign in to sync** at the bottom of the sidebar, and create an account. Playlists already on that device are saved to the account. Sign in on your other devices to load them there.
+
+Once you've created your accounts, you can stop anyone else from signing up: in Firebase, go to **Authentication → Settings → User actions** and turn off **Enable create (sign-up)**.
+
+If a device already has playlists when you sign in, they're combined with the ones in your account. After that, the most recent change wins.
 
 ## Features
 
