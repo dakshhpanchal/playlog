@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         playlog transcripts
 // @namespace    https://dakshhpanchal.github.io/playlog/
-// @version      1.1.0
+// @version      1.2.0
 // @description  Lets playlog copy YouTube transcripts. Runs only on the playlog site and only talks to youtube.com.
 // @match        https://dakshhpanchal.github.io/playlog/*
 // @match        http://localhost/*
@@ -20,14 +20,19 @@
    transcript YouTube shows under "Show transcript", and posts the text back. */
 (function () {
   'use strict';
-  const VERSION = '1.1.0';
+  const VERSION = '1.2.0';
   const gmRequest = typeof GM_xmlhttpRequest === 'function' ? GM_xmlhttpRequest : GM.xmlHttpRequest;
 
   function request(opts) {
     return new Promise((resolve, reject) => {
       gmRequest(Object.assign({}, opts, {
         timeout: 30000,
-        onload: r => (r.status >= 200 && r.status < 300 ? resolve(r.responseText) : reject(new Error('YouTube answered ' + r.status))),
+        onload: r => {
+          if (r.status >= 200 && r.status < 300) return resolve(r.responseText);
+          let why = '';
+          try { why = JSON.parse(r.responseText).error.message; } catch { why = String(r.responseText || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80); }
+          reject(new Error(`${r.status}${why ? ' ' + why : ''}`));
+        },
         onerror: () => reject(new Error('YouTube could not be reached')),
         ontimeout: () => reject(new Error('YouTube took too long to answer')),
       }));
@@ -77,27 +82,36 @@
     return segs;
   }
 
-  // Main method: ask for the caption list the way YouTube's Android app does. Its caption
-  // links work without the extra token the website's player adds.
-  async function viaAndroidPlayer(videoId, html) {
-    const key = pick(html, /"INNERTUBE_API_KEY":"([^"]+)"/) || 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
+  // Main method: ask for the caption list the way YouTube's apps do. Their caption links
+  // work without the extra token the website's player adds. Clients are tried in order.
+  const CLIENTS = [
+    { name: 'vr', id: 28, client: { clientName: 'ANDROID_VR', clientVersion: '1.62.27', deviceMake: 'Oculus', deviceModel: 'Quest 3', androidSdkVersion: 32, osName: 'Android', osVersion: '12L' },
+      ua: 'com.google.android.apps.youtube.vr.oculus/1.62.27 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip' },
+    { name: 'ios', id: 5, client: { clientName: 'IOS', clientVersion: '20.10.4', deviceMake: 'Apple', deviceModel: 'iPhone16,2', osName: 'iPhone', osVersion: '18.3.2.22D82' },
+      ua: 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)' },
+    { name: 'android', id: 3, client: { clientName: 'ANDROID', clientVersion: '20.10.38', androidSdkVersion: 30, osName: 'Android', osVersion: '11' },
+      ua: 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip' },
+  ];
+  async function viaAppPlayer(videoId, html, c) {
+    const visitor = pick(html, /"VISITOR_DATA":"([^"]+)"/);
     const txt = await request({
       method: 'POST', anonymous: true,
-      url: `https://www.youtube.com/youtubei/v1/player?key=${key}&prettyPrint=false`,
-      headers: { 'Content-Type': 'application/json' },
-      data: JSON.stringify({ context: { client: { clientName: 'ANDROID', clientVersion: '20.10.38', hl: 'en' } }, videoId }),
+      url: 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false',
+      headers: { 'Content-Type': 'application/json', 'User-Agent': c.ua, 'X-Youtube-Client-Name': String(c.id), 'X-Youtube-Client-Version': c.client.clientVersion, ...(visitor ? { 'X-Goog-Visitor-Id': visitor } : {}) },
+      data: JSON.stringify({ context: { client: Object.assign({ hl: 'en', gl: 'US' }, c.client, visitor ? { visitorData: visitor } : {}) }, videoId, contentCheckOk: true, racyCheckOk: true }),
     });
     const j = JSON.parse(txt);
     const tracks = j?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
     if (!tracks.length) {
       const st = j?.playabilityStatus?.status;
-      if (st && st !== 'OK') throw new Error(`YouTube said ${String(j.playabilityStatus.reason || st).toLowerCase()}`);
-      return null;
+      if (st && st !== 'OK') throw new Error(String(j.playabilityStatus.reason || st));
+      throw new Error('no captions listed');
     }
     const t = chooseTrack(tracks);
-    const xml = await request({ method: 'GET', anonymous: true, url: t.baseUrl.replace(/&fmt=[^&]*/, '') });
+    const xml = await request({ method: 'GET', anonymous: true, headers: { 'User-Agent': c.ua }, url: t.baseUrl.replace(/&fmt=[^&]*/, '') });
     const segs = parseCaptionXml(xml);
-    return segs.length ? { text: format(segs), lang: runsText(t.name) } : null;
+    if (!segs.length) throw new Error('caption file was empty');
+    return { text: format(segs), lang: runsText(t.name) };
   }
 
   async function viaTranscriptPanel(html) {
@@ -144,14 +158,18 @@
   async function transcript(videoId) {
     if (!/^[\w-]{11}$/.test(videoId)) throw new Error('not a YouTube video');
     const html = await request({ method: 'GET', url: `https://www.youtube.com/watch?v=${videoId}&hl=en`, headers: { 'Accept-Language': 'en-US,en;q=0.9' } });
-    let r = null, err = null;
-    for (const method of [() => viaAndroidPlayer(videoId, html), () => viaTranscriptPanel(html), () => viaCaptionTrack(html)]) {
-      try { r = await method(); } catch (e) { console.warn('[playlog transcripts]', e); err = err || e; }
-      if (r) break;
+    if (!/"captionTracks"/.test(html) && /"playabilityStatus":\{"status":"OK"/.test(html)) throw new Error('this video has no captions');
+    const methods = [
+      ...CLIENTS.map(c => [c.name, () => viaAppPlayer(videoId, html, c)]),
+      ['panel', () => viaTranscriptPanel(html)],
+      ['web', () => viaCaptionTrack(html)],
+    ];
+    const fails = [];
+    for (const [name, run] of methods) {
+      try { const r = await run(); if (r) return r; fails.push(name + ': nothing returned'); }
+      catch (e) { console.warn('[playlog transcripts]', name, e); fails.push(`${name}: ${e.message || e}`); }
     }
-    if (r) return r;
-    if (/"playabilityStatus":\{"status":"(LOGIN_REQUIRED|ERROR|UNPLAYABLE)"/.test(html)) throw new Error('the video is private, removed or age-restricted');
-    throw err || new Error('this video has no captions');
+    throw new Error(`helper ${VERSION} could not get it. ${fails.join('; ')}`);
   }
 
   window.addEventListener('message', async e => {
