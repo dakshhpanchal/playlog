@@ -285,12 +285,8 @@
   .drop div { padding: 40px 56px; border: 2px dashed rgba(255,255,255,.7); border-radius: 14px; pointer-events: none; }
 
   /* Account dialog */
-  .dlg .alt { font-size: 14px; color: var(--ink-2); margin-top: 4px; }
-  .link { color: var(--pen); font-weight: 500; text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--pen) 35%, transparent); text-underline-offset: 3px; }
-  .link:hover { text-decoration-color: currentColor; }
   .acct-who { margin-top: 18px; padding: 14px 16px; border-radius: 10px; background: var(--desk); font-size: 14px; color: var(--ink-2); }
   .acct-who b { display: block; font-size: 16px; font-weight: 500; color: var(--ink); overflow-wrap: anywhere; }
-  .status.ok { color: var(--ink); }
   .dlg-acts .grow { flex: 1; }
 
   .scrim { display: none; }
@@ -357,7 +353,7 @@
   <aside class="side" aria-label="Playlists">
     <a class="logo" href="#" data-act="home"><span class="logo-mark" aria-hidden="true"><i></i><i></i><i></i></span>playlog</a>
     <nav class="side-nav" id="side-nav"></nav>
-    <button class="acct" id="acct" data-act="account" hidden><span class="dot"></span><span><b id="acct-name">Sign in to sync</b><small id="acct-state">Sync across your devices</small></span></button>
+    <button class="acct" id="acct" data-act="account" hidden><span class="dot"></span><span><b id="acct-name">Sign in with Google</b><small id="acct-state">Sync across your devices</small></span></button>
     <div class="side-foot">
       <button class="btn btn-quiet" data-act="new-group"><svg class="i"><use href="#i-plus"/></svg>New playlist</button>
       <button class="btn btn-quiet btn-icon" data-act="app-menu" aria-label="Settings and backup" title="Settings and backup"><svg class="i"><use href="#i-more"/></svg></button>
@@ -449,30 +445,13 @@
 </dialog>
 
 <dialog id="dlg-account" style="width:min(430px, calc(100vw - 24px))">
-  <form class="dlg" id="form-account" novalidate>
-    <h2 id="dac-title">Sign in</h2>
-    <p class="sub" id="dac-sub"></p>
-    <div id="dac-out">
-      <div class="field">
-        <label for="dac-email">Email</label>
-        <input class="input" id="dac-email" type="email" autocomplete="username" spellcheck="false">
-      </div>
-      <div class="field">
-        <label for="dac-pass">Password</label>
-        <input class="input" id="dac-pass" type="password" autocomplete="current-password">
-        <div class="hint" id="dac-hint"></div>
-      </div>
-      <p class="alt" id="dac-alt"></p>
-    </div>
-    <div id="dac-in" hidden>
-      <div class="acct-who">Signed in as<b id="dac-who"></b><span id="dac-when"></span></div>
-    </div>
-    <div class="status" id="dac-status"><div class="spin" id="dac-spin"></div><span id="dac-msg"></span></div>
+  <form class="dlg" method="dialog">
+    <h2>Your account</h2>
+    <div class="acct-who">Signed in as<b id="dac-who"></b><span id="dac-when"></span></div>
     <div class="dlg-acts">
-      <button type="button" class="btn btn-quiet" id="dac-signout" hidden>Sign out</button>
+      <button type="button" class="btn btn-quiet" id="dac-signout">Sign out</button>
       <span class="grow"></span>
-      <button type="button" class="btn btn-quiet" data-close id="dac-cancel">Cancel</button>
-      <button type="submit" class="btn btn-pen" id="dac-submit">Sign in</button>
+      <button class="btn btn-pen">Done</button>
     </div>
   </form>
 </dialog>
@@ -891,7 +870,7 @@ function groupMenu(from) {
 function appMenu(from) {
   const dark = document.documentElement.dataset.theme === 'dark';
   openMenu(from, [
-    ...(sync.fb ? [{ id: 'account', icon: 'user', label: sync.user ? 'Account and sync' : 'Sign in to sync', run: openAccount }, '-'] : []),
+    ...(sync.fb ? [{ id: 'account', icon: 'user', label: sync.user ? 'Account and sync' : 'Sign in with Google', run: openAccount }, '-'] : []),
     { id: 'export', icon: 'download', label: 'Download a backup', run: exportData },
     { id: 'import', icon: 'upload', label: 'Import a backup', run: () => $('#import-file').click() },
     '-',
@@ -1080,8 +1059,8 @@ const FIREBASE_SDK = 'https://www.gstatic.com/firebasejs/10.14.1/';
 function setSync(state, msg = '') {
   sync.state = state; sync.msg = msg;
   const el = $('#acct'); el.className = 'acct ' + state;
-  const email = sync.user?.email;
-  $('#acct-name').textContent = email || (state === 'connecting' ? 'Connecting' : state === 'error' ? 'Sync unavailable' : 'Sign in to sync');
+  const email = sync.user?.email || sync.user?.displayName;
+  $('#acct-name').textContent = email || (state === 'connecting' ? 'Connecting' : state === 'error' ? 'Sync unavailable' : 'Sign in with Google');
   $('#acct-state').textContent = {
     connecting: 'Connecting to sync…',
     out: 'Sync across your devices',
@@ -1089,7 +1068,7 @@ function setSync(state, msg = '') {
     synced: 'All changes synced',
     error: 'Not synced. Saved on this device.',
   }[state] || '';
-  if ($('#dlg-account').open && acctView === 'in') fillSignedIn();
+  if ($('#dlg-account').open) fillSignedIn();
 }
 
 async function initSync() {
@@ -1198,89 +1177,42 @@ async function push() {
   }
 }
 
-/* Account dialog: 'in' (signed in), 'signin' or 'signup'. */
-let acctView = 'signin';
+/* Sign-in is with Google. Signed out, the sidebar button opens Google's sign-in;
+   signed in, it opens a small account panel. */
 const AUTH_ERRORS = {
-  'auth/invalid-credential': 'That email and password don’t match an account.',
-  'auth/invalid-login-credentials': 'That email and password don’t match an account.',
-  'auth/wrong-password': 'That email and password don’t match an account.',
-  'auth/user-not-found': 'That email and password don’t match an account.',
-  'auth/email-already-in-use': 'There’s already an account with this email. Sign in instead.',
-  'auth/weak-password': 'Use a password with at least 6 characters.',
-  'auth/invalid-email': 'Enter a valid email address.',
-  'auth/missing-password': 'Enter your password.',
-  'auth/too-many-requests': 'Too many attempts. Wait a few minutes, then try again.',
-  'auth/network-request-failed': 'Couldn’t reach the sign-in service. Check your connection.',
-  'auth/operation-not-allowed': 'New accounts are turned off for this site.',
-  'auth/admin-restricted-operation': 'New accounts are turned off for this site.',
+  'auth/popup-closed-by-user': '',
+  'auth/cancelled-popup-request': '',
+  'auth/unauthorized-domain': 'This site isn’t allowed to sign in yet. Add its domain under Authentication → Settings → Authorized domains in Firebase.',
+  'auth/operation-not-allowed': 'Google sign-in isn’t turned on for this Firebase project.',
+  'auth/network-request-failed': 'Couldn’t reach Google. Check your connection and try again.',
+  'auth/operation-not-supported-in-this-environment': 'Sign-in doesn’t work from a local file. Use the website instead.',
 };
-function acctStatus(msg, kind = 'busy') {
-  $('#dac-status').className = msg ? 'status show' + (kind === 'err' ? ' err' : kind === 'ok' ? ' ok' : '') : 'status';
-  $('#dac-msg').textContent = msg || ''; $('#dac-spin').style.display = kind === 'busy' ? '' : 'none';
-}
 function fillSignedIn() {
-  $('#dac-who').textContent = sync.user?.email || '';
+  $('#dac-who').textContent = sync.user?.email || sync.user?.displayName || '';
   $('#dac-when').textContent = {
     synced: 'Your playlists are saved to your account. Changes sync to every device you’re signed in on.',
     syncing: 'Syncing your changes…',
     error: `Not synced: ${sync.msg} Your changes are saved on this device and will sync when this is fixed.`,
   }[sync.state] || '';
 }
-function showAcct(view) {
-  acctView = view;
-  const signup = view === 'signup', inn = view === 'in';
-  $('#dac-out').hidden = inn; $('#dac-in').hidden = !inn;
-  $('#dac-signout').hidden = !inn; $('#dac-cancel').hidden = inn;
-  $('#dac-title').textContent = inn ? 'Your account' : signup ? 'Create an account' : 'Sign in';
-  $('#dac-sub').textContent = inn ? '' : signup
-    ? 'Your playlists on this device are saved to the new account. Sign in with it on your other devices to see them there.'
-    : 'Sign in to sync your playlists between your devices.';
-  $('#dac-sub').hidden = inn;
-  $('#dac-submit').textContent = inn ? 'Done' : signup ? 'Create account' : 'Sign in';
-  $('#dac-pass').autocomplete = signup ? 'new-password' : 'current-password';
-  $('#dac-hint').innerHTML = signup ? 'At least 6 characters.' : '<button type="button" class="link" id="dac-forgot">Forgot your password?</button>';
-  $('#dac-alt').innerHTML = signup
-    ? 'Already have an account? <button type="button" class="link" data-view="signin">Sign in</button>'
-    : 'No account yet? <button type="button" class="link" data-view="signup">Create one</button>';
-  if (inn) fillSignedIn();
-  acctStatus('');
+async function signIn() {
+  const { A, auth } = sync.fb, provider = new A.GoogleAuthProvider();
+  provider.setCustomParameters({ prompt: 'select_account' });
+  try {
+    const r = await A.signInWithPopup(auth, provider);
+    toast(`Signed in as ${r.user.email}.`);
+  } catch (err) {
+    if (err.code === 'auth/popup-blocked') return A.signInWithRedirect(auth, provider);
+    const msg = AUTH_ERRORS[err.code] ?? `Sign-in didn’t work (${err.code || err.message}).`;
+    if (msg) toast(msg, null, null, 8000);
+  }
 }
 function openAccount() {
   document.body.classList.remove('nav');
   if (!sync.fb) return toast(sync.state === 'error' ? 'Sync is unavailable right now. Your playlists are saved on this device.' : 'Connecting to sync…');
-  showAcct(sync.user ? 'in' : 'signin');
-  $('#dac-pass').value = '';
-  $('#dlg-account').showModal();
-  if (!sync.user) ($('#dac-email').value ? $('#dac-pass') : $('#dac-email')).focus();
+  if (!sync.user) return signIn();
+  fillSignedIn(); $('#dlg-account').showModal();
 }
-$('#form-account').addEventListener('click', async e => {
-  const v = e.target.closest('[data-view]');
-  if (v) { showAcct(v.dataset.view); $('#dac-email').focus(); return; }
-  if (e.target.id === 'dac-forgot') {
-    const email = $('#dac-email').value.trim();
-    if (!email) { acctStatus('Enter your email first, then choose Forgot your password.', 'err'); return $('#dac-email').focus(); }
-    acctStatus('Sending a reset link…');
-    try { await sync.fb.A.sendPasswordResetEmail(sync.fb.auth, email); acctStatus(`If ${email} has an account, a reset link is on its way. Check your inbox and spam folder.`, 'ok'); }
-    catch (err) { acctStatus(AUTH_ERRORS[err.code] || 'The reset link could not be sent.', 'err'); }
-  }
-});
-$('#form-account').addEventListener('submit', async e => {
-  e.preventDefault();
-  if (acctView === 'in') return $('#dlg-account').close();
-  const email = $('#dac-email').value.trim(), pass = $('#dac-pass').value, signup = acctView === 'signup';
-  if (!email) { acctStatus('Enter your email.', 'err'); return $('#dac-email').focus(); }
-  if (!pass) { acctStatus('Enter your password.', 'err'); return $('#dac-pass').focus(); }
-  $('#dac-submit').disabled = true;
-  acctStatus(signup ? 'Creating your account…' : 'Signing in…');
-  try {
-    const { A, auth } = sync.fb;
-    await (signup ? A.createUserWithEmailAndPassword : A.signInWithEmailAndPassword)(auth, email, pass);
-    $('#dlg-account').close();
-    toast(signup ? 'Account created. Your playlists now sync.' : `Signed in as ${email}.`);
-  } catch (err) {
-    acctStatus(AUTH_ERRORS[err.code] || `That didn’t work (${err.code || err.message}).`, 'err');
-  } finally { $('#dac-submit').disabled = false; }
-});
 $('#dac-signout').addEventListener('click', async () => {
   $('#dlg-account').close();
   sync.meta.uid = null; saveMeta();
