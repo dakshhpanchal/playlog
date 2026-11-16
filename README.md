@@ -57,6 +57,18 @@ If a device already has playlists when you sign in, they're combined with the on
 - Light and dark themes, a phone layout, and support for reduced-motion settings.
 - Keyboard shortcuts: `/` to search, `P` to play the next video, `D` to mark it watched, `A` to add videos, `J`/`K` to switch playlists, `?` to list them all.
 
+## Copy transcripts for notes
+
+Each YouTube video has a copy button, also shown on the up next card, and each playlist has a **Copy transcripts** button for the videos in the current tab (All, To watch or Watched). What's copied starts with a notes prompt, which you can change under **⋯ → Notes prompt**, so you can paste it straight into Gemini or another assistant.
+
+Browsers don't let a website read YouTube transcripts directly. To copy the actual transcript text, install the **transcript helper** userscript:
+
+1. Install [Violentmonkey](https://violentmonkey.github.io/) (Firefox, Zen, Chrome, Edge, Firefox for Android) or Tampermonkey.
+2. Open [`playlog-transcripts.user.js`](https://dakshhpanchal.github.io/playlog/playlog-transcripts.user.js) and click **Install**.
+3. Reload playlog.
+
+The helper runs only on the playlog site. It fetches the same transcript YouTube shows under "Show transcript", in your own browser. Without the helper, or for videos without captions, playlog copies the prompt with the video links instead. Gemini can read YouTube videos from a link.
+
 ## Run it
 
 Open `index.html` in a browser, or serve the folder:

@@ -101,6 +101,7 @@
   .pl-bar i { display: block; height: 100%; background: var(--pen); }
   .side-empty { padding: 8px 12px; color: var(--ink-3); font-size: 14px; }
 
+  .next-actions { flex-wrap: wrap; }
   .acct { display: flex; align-items: flex-start; gap: 10px; width: calc(100% - 10px); margin-top: 8px; padding: 8px 10px; border-radius: 8px; text-align: left; font-size: 13px; color: var(--ink-3); }
   .acct:hover { background: rgba(127, 127, 127, .1); }
   [hidden] { display: none !important; }
@@ -345,6 +346,7 @@
   <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></symbol>
   <symbol id="i-up" viewBox="0 0 24 24"><path d="m6 15 6-6 6 6"/></symbol>
   <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></symbol>
   <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
   <symbol id="i-stack" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></symbol>
 </svg>
@@ -452,6 +454,23 @@
       <button type="button" class="btn btn-quiet" id="dac-signout">Sign out</button>
       <span class="grow"></span>
       <button class="btn btn-pen">Done</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-prompt">
+  <form class="dlg" id="form-prompt">
+    <h2>Notes prompt</h2>
+    <p class="sub">Added in front of everything you copy, so you can paste straight into Gemini or another assistant.</p>
+    <div class="field">
+      <label for="dp-text">Prompt</label>
+      <textarea id="dp-text" style="min-height:140px"></textarea>
+    </div>
+    <div class="dlg-acts">
+      <button type="button" class="btn btn-quiet" id="dp-reset">Use the default</button>
+      <span class="grow"></span>
+      <button type="button" class="btn btn-quiet" data-close>Cancel</button>
+      <button type="submit" class="btn btn-pen">Save prompt</button>
     </div>
   </form>
 </dialog>
@@ -689,6 +708,7 @@ function renderGroup(g, intro) {
       <div class="next-actions">
         ${link ? `<a class="btn btn-pen" href="${esc(n.title)}" target="_blank" rel="noopener">${icon('play')}Play</a>` : ''}
         <button class="btn" data-act="toggle" data-vid="${esc(n.id)}">${icon('check')}Mark watched</button>
+        ${id ? `<button class="btn" data-act="copy-one" data-vid="${esc(n.id)}">${icon('copy')}Copy transcript</button>` : ''}
       </div></section>`;
   } else if (st.total) {
     next = `<p class="done-note"><b>You’ve finished this playlist.</b> Add more videos, or pick another playlist.</p>`;
@@ -697,6 +717,7 @@ function renderGroup(g, intro) {
   $('#g-head').innerHTML = `<header class="g-head">
       <div class="g-top"><h1 class="g-name${g.name.length > 10 ? ' long' : ''}">${esc(g.name)}</h1>
         <div class="g-actions">
+          ${g.videos.some(v => ytId(v.title)) ? `<button class="btn" data-act="copy-all" title="Copies the transcripts of the videos in the current tab">${icon('copy')}Copy transcripts</button>` : ''}
           <button class="btn btn-pen" data-act="add-videos">${icon('plus')}Add videos</button>
           <button class="btn btn-icon" data-act="group-menu" aria-label="Playlist options" title="Playlist options">${icon('more')}</button>
         </div></div>
@@ -744,6 +765,7 @@ function renderRows(g) {
       <div class="r-title">${link ? `<a href="${esc(v.title)}" target="_blank" rel="noopener">${title}</a>` : title}${sub ? `<span class="r-sub">${sub}</span>` : ''}</div>
       <div class="r-act">
         ${link ? `<a class="btn btn-quiet btn-sm btn-icon" href="${esc(v.title)}" target="_blank" rel="noopener" aria-label="Open in a new tab" title="Open in a new tab">${icon('ext')}</a>` : ''}
+        ${ytId(v.title) ? `<button class="btn btn-quiet btn-sm btn-icon" data-act="copy-one" data-vid="${esc(v.id)}" aria-label="Copy transcript" title="Copy transcript">${icon('copy')}</button>` : ''}
         <button class="btn btn-quiet btn-sm btn-icon" data-act="delete" data-vid="${esc(v.id)}" aria-label="Remove from playlist" title="Remove from playlist">${icon('trash')}</button>
       </div>
       <span class="len">${v.duration ? fmtClock(v.duration) : ''}</span>
@@ -873,6 +895,8 @@ function appMenu(from) {
     ...(sync.fb ? [{ id: 'account', icon: 'user', label: sync.user ? 'Account and sync' : 'Sign in with Google', run: openAccount }, '-'] : []),
     { id: 'export', icon: 'download', label: 'Download a backup', run: exportData },
     { id: 'import', icon: 'upload', label: 'Import a backup', run: () => $('#import-file').click() },
+    '-',
+    { id: 'prompt', icon: 'edit', label: 'Notes prompt', run: openPromptDlg },
     '-',
     { id: 'theme', icon: dark ? 'sun' : 'moon', label: dark ? 'Light theme' : 'Dark theme', run: flipTheme },
     { id: 'keys', icon: 'keyboard', label: 'Keyboard shortcuts', run: () => $('#dlg-keys').showModal() },
@@ -1220,6 +1244,105 @@ $('#dac-signout').addEventListener('click', async () => {
   catch { toast('Sign-out failed. Try again.'); }
 });
 
+/* ---------- Transcripts ----------
+   Browsers can't read YouTube transcripts from another site, so real transcripts come
+   from the optional userscript (playlog-transcripts.user.js), which fetches them in the
+   person's own browser. Without it, or when a video has no captions, we copy the link
+   instead: Gemini can read a YouTube video from its link. */
+const DEFAULT_PROMPT = 'Make detailed study notes from this lecture. Cover every concept in the order it is taught, with definitions, explanations, examples and formulas. End with a short summary and likely exam questions.';
+const USERSCRIPT_URL = 'https://dakshhpanchal.github.io/playlog/playlog-transcripts.user.js';
+const notesPrompt = () => (prefs.notesPrompt || DEFAULT_PROMPT).trim();
+const bridge = { ready: false, version: '', seq: 0, wait: new Map() };
+addEventListener('message', e => {
+  const m = e.data;
+  if (!m || typeof m !== 'object') return;
+  if (m.type === 'playlog-transcripts-ready') { bridge.ready = true; bridge.version = m.version || ''; }
+  if (m.type === 'playlog-transcript-result' && bridge.wait.has(m.id)) { bridge.wait.get(m.id)(m); bridge.wait.delete(m.id); }
+});
+postMessage({ type: 'playlog-transcripts-ping' }, '*');
+function fetchTranscript(videoId) {
+  if (!bridge.ready) return Promise.resolve({ ok: false, error: 'not-installed' });
+  const id = ++bridge.seq;
+  return new Promise(res => {
+    const t = setTimeout(() => { bridge.wait.delete(id); res({ ok: false, error: 'YouTube took too long to answer' }); }, 45000);
+    bridge.wait.set(id, r => { clearTimeout(t); res(r); });
+    postMessage({ type: 'playlog-transcript-request', id, videoId }, '*');
+  });
+}
+const watchUrl = id => `https://www.youtube.com/watch?v=${id}`;
+
+async function writeClipboard(text, doneMsg) {
+  try { await navigator.clipboard.writeText(text); toast(doneMsg, null, null, 6000); }
+  catch {
+    // The browser forgot the click while we were fetching; ask for one more click.
+    toast('Transcripts are ready.', 'Copy', async () => {
+      try { await navigator.clipboard.writeText(text); toast(doneMsg); } catch { toast('Your browser blocked copying. Try again.'); }
+    }, 60000);
+  }
+}
+function installHint() {
+  if (bridge.ready || prefs.hideTranscriptHint) return;
+  toast('Copied the link. Install the transcript helper to copy real transcripts.', 'How', () => {
+    window.open(USERSCRIPT_URL, '_blank', 'noopener');
+  }, 9000);
+}
+
+async function copyOne(vid) {
+  const g = activeGroup(), v = g?.videos.find(x => x.id === vid), id = v && ytId(v.title);
+  if (!id) return;
+  const head = `${notesPrompt()}\n\nTitle: ${label(v)}\nLink: ${watchUrl(id)}`;
+  if (!bridge.ready) { await writeClipboard(head, 'Copied the prompt and link for Gemini.'); return installHint(); }
+  const prog = document.createElement('div'); prog.className = 'toast plain'; prog.innerHTML = '<span>Getting the transcript…</span>'; $('#toasts').append(prog);
+  const r = await fetchTranscript(id); prog.remove();
+  if (r.ok) return writeClipboard(`${head}\n\nTranscript${r.lang ? ` (${r.lang})` : ''}:\n${r.text}`, `Copied the transcript of “${label(v)}”.`);
+  await writeClipboard(head, `No transcript (${r.error}). Copied the link instead, which Gemini can read.`);
+}
+
+let copying = false;
+async function copyAll() {
+  const g = activeGroup(); if (!g || copying) return;
+  let vs = g.videos.filter(v => ytId(v.title));
+  if (filter === 'todo') vs = vs.filter(v => !v.done);
+  if (filter === 'done') vs = vs.filter(v => v.done);
+  if (!vs.length) return toast('There are no YouTube videos in this tab.');
+  const which = filter === 'todo' ? 'unwatched ' : filter === 'done' ? 'watched ' : '';
+  const pos = v => g.videos.indexOf(v) + 1;
+  if (!bridge.ready) {
+    const text = `${notesPrompt()}\nMake separate notes for each lecture.\n\n` + vs.map(v => `${pos(v)}. ${label(v)}\n${watchUrl(ytId(v.title))}`).join('\n\n');
+    await writeClipboard(text, `Copied the links of ${plural(vs.length, which + 'video')} for Gemini.`);
+    return installHint();
+  }
+  copying = true;
+  const parts = [], missing = [];
+  const prog = document.createElement('div'); prog.className = 'toast plain'; $('#toasts').append(prog);
+  try {
+    for (let i = 0; i < vs.length; i++) {
+      const v = vs[i], id = ytId(v.title);
+      prog.innerHTML = `<span>Getting transcripts: ${i + 1} of ${vs.length}</span>`;
+      const r = await fetchTranscript(id);
+      if (r.ok) parts.push(`## ${pos(v)}. ${label(v)}\n${watchUrl(id)}\n\n${r.text}`);
+      else { missing.push(pos(v)); parts.push(`## ${pos(v)}. ${label(v)}\n${watchUrl(id)}\n\n(No transcript available. Use the link.)`); }
+    }
+  } finally { prog.remove(); copying = false; }
+  const text = `${notesPrompt()}\nMake separate notes for each lecture.\n\n${parts.join('\n\n')}`;
+  const got = vs.length - missing.length;
+  await writeClipboard(text, missing.length
+    ? `Copied ${got} of ${vs.length} transcripts. No transcript for video ${missing.join(', ')}.`
+    : `Copied ${plural(got, which + 'transcript')}.`);
+}
+
+function openPromptDlg() {
+  $('#dp-text').value = notesPrompt();
+  $('#dlg-prompt').showModal(); $('#dp-text').focus();
+}
+$('#dp-reset').onclick = () => { $('#dp-text').value = DEFAULT_PROMPT; };
+$('#form-prompt').addEventListener('submit', e => {
+  e.preventDefault();
+  const t = $('#dp-text').value.trim();
+  prefs.notesPrompt = t && t !== DEFAULT_PROMPT ? t : undefined; savePrefs();
+  $('#dlg-prompt').close(); toast('Prompt saved.');
+});
+
 /* ---------- Events ---------- */
 document.addEventListener('click', e => {
   if (menu.classList.contains('open') && !e.target.closest('#menu, [data-act$="menu"]')) closeMenu();
@@ -1244,6 +1367,8 @@ document.addEventListener('click', e => {
     'group-menu': () => groupMenu(el),
     'app-menu': () => appMenu(el),
     account: openAccount,
+    'copy-one': () => copyOne(d.vid),
+    'copy-all': copyAll,
     theme: flipTheme,
     import: () => $('#import-file').click(),
     'open-nav': () => document.body.classList.add('nav'),
