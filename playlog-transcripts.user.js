@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         playlog transcripts
 // @namespace    https://dakshhpanchal.github.io/playlog/
-// @version      1.0.0
+// @version      1.1.0
 // @description  Lets playlog copy YouTube transcripts. Runs only on the playlog site and only talks to youtube.com.
 // @match        https://dakshhpanchal.github.io/playlog/*
 // @match        http://localhost/*
@@ -20,7 +20,7 @@
    transcript YouTube shows under "Show transcript", and posts the text back. */
 (function () {
   'use strict';
-  const VERSION = '1.0.0';
+  const VERSION = '1.1.0';
   const gmRequest = typeof GM_xmlhttpRequest === 'function' ? GM_xmlhttpRequest : GM.xmlHttpRequest;
 
   function request(opts) {
@@ -59,6 +59,45 @@
       cur.words.push(t);
     }
     return out.map(p => typeof p === 'string' ? p : `[${clock(p.start)}] ${p.words.join(' ')}`).join('\n').trim();
+  }
+
+  const htmlDecode = s => new DOMParser().parseFromString('<!doctype html><body>' + s, 'text/html').body.textContent;
+
+  // Picks English captions if there are any, preferring ones written by a person.
+  function chooseTrack(tracks) {
+    const en = t => /^en/.test(t.languageCode);
+    return tracks.find(t => en(t) && t.kind !== 'asr') || tracks.find(en) || tracks.find(t => t.kind !== 'asr') || tracks[0];
+  }
+
+  // Parses YouTube's caption XML: <text start="s" dur="s"> (srv1) or <p t="ms"> (srv3).
+  function parseCaptionXml(xml) {
+    const doc = new DOMParser().parseFromString(xml, 'text/xml'), segs = [];
+    for (const n of doc.querySelectorAll('text')) segs.push({ start: Math.round(parseFloat(n.getAttribute('start') || '0') * 1000), text: htmlDecode(n.textContent) });
+    if (!segs.length) for (const n of doc.querySelectorAll('p')) segs.push({ start: +n.getAttribute('t') || 0, text: htmlDecode(n.textContent) });
+    return segs;
+  }
+
+  // Main method: ask for the caption list the way YouTube's Android app does. Its caption
+  // links work without the extra token the website's player adds.
+  async function viaAndroidPlayer(videoId, html) {
+    const key = pick(html, /"INNERTUBE_API_KEY":"([^"]+)"/) || 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
+    const txt = await request({
+      method: 'POST', anonymous: true,
+      url: `https://www.youtube.com/youtubei/v1/player?key=${key}&prettyPrint=false`,
+      headers: { 'Content-Type': 'application/json' },
+      data: JSON.stringify({ context: { client: { clientName: 'ANDROID', clientVersion: '20.10.38', hl: 'en' } }, videoId }),
+    });
+    const j = JSON.parse(txt);
+    const tracks = j?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
+    if (!tracks.length) {
+      const st = j?.playabilityStatus?.status;
+      if (st && st !== 'OK') throw new Error(`YouTube said ${String(j.playabilityStatus.reason || st).toLowerCase()}`);
+      return null;
+    }
+    const t = chooseTrack(tracks);
+    const xml = await request({ method: 'GET', anonymous: true, url: t.baseUrl.replace(/&fmt=[^&]*/, '') });
+    const segs = parseCaptionXml(xml);
+    return segs.length ? { text: format(segs), lang: runsText(t.name) } : null;
   }
 
   async function viaTranscriptPanel(html) {
@@ -106,8 +145,10 @@
     if (!/^[\w-]{11}$/.test(videoId)) throw new Error('not a YouTube video');
     const html = await request({ method: 'GET', url: `https://www.youtube.com/watch?v=${videoId}&hl=en`, headers: { 'Accept-Language': 'en-US,en;q=0.9' } });
     let r = null, err = null;
-    try { r = await viaTranscriptPanel(html); } catch (e) { err = e; }
-    if (!r) { try { r = await viaCaptionTrack(html); } catch (e) { err = err || e; } }
+    for (const method of [() => viaAndroidPlayer(videoId, html), () => viaTranscriptPanel(html), () => viaCaptionTrack(html)]) {
+      try { r = await method(); } catch (e) { console.warn('[playlog transcripts]', e); err = err || e; }
+      if (r) break;
+    }
     if (r) return r;
     if (/"playabilityStatus":\{"status":"(LOGIN_REQUIRED|ERROR|UNPLAYABLE)"/.test(html)) throw new Error('the video is private, removed or age-restricted');
     throw err || new Error('this video has no captions');
