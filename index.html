@@ -102,6 +102,10 @@
   .side-empty { padding: 8px 12px; color: var(--ink-3); font-size: 14px; }
 
   .next-actions { flex-wrap: wrap; }
+  #dt-parts { max-height: 46vh; overflow: auto; }
+  .tx-part { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 0; border-top: 1px solid var(--rule); font-size: 14px; color: var(--ink-2); }
+  .tx-part b { color: var(--ink); font-weight: 600; margin-right: 6px; }
+  .tx-part .btn.copied { color: var(--pen); border-color: var(--pen); }
   .acct { display: flex; align-items: flex-start; gap: 10px; width: calc(100% - 10px); margin-top: 8px; padding: 8px 10px; border-radius: 8px; text-align: left; font-size: 13px; color: var(--ink-3); }
   .acct:hover { background: rgba(127, 127, 127, .1); }
   [hidden] { display: none !important; }
@@ -454,6 +458,19 @@
       <button type="button" class="btn btn-quiet" id="dac-signout">Sign out</button>
       <span class="grow"></span>
       <button class="btn btn-pen">Done</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-tx" style="width:min(520px, calc(100vw - 24px))">
+  <form class="dlg" method="dialog">
+    <h2>Transcripts ready</h2>
+    <p class="sub" id="dt-sub"></p>
+    <div id="dt-parts"></div>
+    <div class="dlg-acts">
+      <button type="button" class="btn btn-quiet" id="dt-download">Download as a file</button>
+      <span class="grow"></span>
+      <button type="button" class="btn btn-pen" id="dt-copyall">Copy</button>
     </div>
   </form>
 </dialog>
@@ -1298,9 +1315,13 @@ async function copyOne(vid) {
   await writeClipboard(head, `No transcript (${r.error}). Copied the link instead, which Gemini can read.`);
 }
 
-let copying = false;
+let copying = null;
+const PART_WORDS = 60000;   // about what Gemini comfortably reads in one message
+const words = t => (t.match(/\S+/g) || []).length;
+
 async function copyAll() {
-  const g = activeGroup(); if (!g || copying) return;
+  const g = activeGroup(); if (!g) return;
+  if (copying) return toast('Already getting transcripts.');
   let vs = g.videos.filter(v => ytId(v.title));
   if (filter === 'todo') vs = vs.filter(v => !v.done);
   if (filter === 'done') vs = vs.filter(v => v.done);
@@ -1312,24 +1333,71 @@ async function copyAll() {
     await writeClipboard(text, `Copied the links of ${plural(vs.length, which + 'video')} for Gemini.`);
     return installHint();
   }
-  copying = true;
-  const parts = [], missing = [];
-  const prog = document.createElement('div'); prog.className = 'toast plain'; $('#toasts').append(prog);
-  try {
-    for (let i = 0; i < vs.length; i++) {
-      const v = vs[i], id = ytId(v.title);
-      prog.innerHTML = `<span>Getting transcripts: ${i + 1} of ${vs.length}</span>`;
-      const r = await fetchTranscript(id);
-      if (r.ok) parts.push(`## ${pos(v)}. ${label(v)}\n${watchUrl(id)}\n\n${r.text}`);
-      else { missing.push(pos(v)); parts.push(`## ${pos(v)}. ${label(v)}\n${watchUrl(id)}\n\n(No transcript available. Use the link.)`); }
+
+  const job = copying = { cancel: false };
+  const items = vs.map(v => ({ pos: pos(v), title: label(v), url: watchUrl(ytId(v.title)), id: ytId(v.title), text: null, error: '' }));
+  const prog = document.createElement('div'); prog.className = 'toast';
+  prog.innerHTML = '<span></span><button>Cancel</button>';
+  prog.querySelector('button').onclick = () => { job.cancel = true; };
+  $('#toasts').append(prog);
+  let done = 0, next = 0;
+  const tick = () => { prog.firstChild.textContent = `Getting transcripts: ${done} of ${items.length}`; };
+  tick();
+  const worker = async () => {
+    while (!job.cancel && next < items.length) {
+      const it = items[next++];
+      const r = await fetchTranscript(it.id);
+      if (r.ok) it.text = r.text; else it.error = r.error || 'no transcript';
+      done++; tick();
     }
-  } finally { prog.remove(); copying = false; }
-  const text = `${notesPrompt()}\nMake separate notes for each lecture.\n\n${parts.join('\n\n')}`;
-  const got = vs.length - missing.length;
-  await writeClipboard(text, missing.length
-    ? `Copied ${got} of ${vs.length} transcripts. No transcript for video ${missing.join(', ')}.`
-    : `Copied ${plural(got, which + 'transcript')}.`);
+  };
+  try { await Promise.all([worker(), worker(), worker()]); }
+  finally { prog.remove(); copying = null; }
+  if (job.cancel) return toast('Stopped getting transcripts.');
+  showTranscripts(g, items, which);
 }
+
+/* Shows the fetched transcripts with buttons to copy them in Gemini-sized parts or
+   download them as one file. Each button is its own click, so copying always works. */
+let tx = null;
+function block(it) { return `## ${it.pos}. ${it.title}\n${it.url}\n\n${it.text ?? '(No transcript available. Use the link.)'}`; }
+function showTranscripts(g, items, which) {
+  const got = items.filter(i => i.text), miss = items.filter(i => !i.text);
+  const parts = []; let cur = null;
+  for (const it of items) {
+    const w = words(it.text || '') + 20;
+    if (!cur || (cur.words + w > PART_WORDS && cur.items.length)) parts.push(cur = { items: [], words: 0 });
+    cur.items.push(it); cur.words += w;
+  }
+  const head = `${notesPrompt()}\nMake separate notes for each lecture.`;
+  const partText = (pt, i) => `${head}${parts.length > 1 ? `\nThis is part ${i + 1} of ${parts.length}.` : ''}\n\n${pt.items.map(block).join('\n\n')}`;
+  tx = { g, items, parts, partText, all: `${head}\n\n${items.map(block).join('\n\n')}` };
+  const total = parts.reduce((n, p) => n + p.words, 0);
+  const range = pt => { const a = pt.items[0].pos, b = pt.items[pt.items.length - 1].pos; return a === b ? `video ${a}` : `videos ${a} to ${b}`; };
+  $('#dt-sub').textContent = `Got ${got.length} of ${items.length} ${which}transcripts, about ${total.toLocaleString()} words.`
+    + (miss.length ? ` No transcript for video ${miss.map(i => i.pos).join(', ')}${miss[0].error ? ` (${miss[0].error})` : ''}.` : '');
+  $('#dt-parts').innerHTML = parts.length > 1
+    ? `<p class="hint" style="margin:0 0 10px">That’s too much for one Gemini message, so it’s split into ${parts.length} parts. Paste them one at a time, or download the file and upload it to Gemini.</p>`
+      + parts.map((pt, i) => `<div class="tx-part"><span><b>Part ${i + 1}</b> ${range(pt)}, ${pt.words.toLocaleString()} words</span><button type="button" class="btn btn-sm" data-part="${i}">${icon('copy')}Copy</button></div>`).join('')
+    : '';
+  $('#dt-copyall').innerHTML = `${icon('copy')}${parts.length > 1 ? 'Copy everything' : 'Copy'}`;
+  $('#dlg-tx').showModal();
+}
+$('#dlg-tx').addEventListener('click', async e => {
+  const b = e.target.closest('[data-part], #dt-copyall, #dt-download'); if (!b || !tx) return;
+  if (b.id === 'dt-download') {
+    const blob = new Blob([tx.all], { type: 'text/plain' }), a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = `${tx.g.name.replace(/[^\w\- ]+/g, '').trim() || 'playlist'} transcripts.txt`;
+    a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    return toast('Downloaded. Upload the file to Gemini with the paperclip button.');
+  }
+  const text = b.id === 'dt-copyall' ? tx.all : tx.partText(tx.parts[+b.dataset.part], +b.dataset.part);
+  try {
+    await navigator.clipboard.writeText(text);
+    if (b.dataset.part != null) { b.innerHTML = `${icon('check')}Copied`; b.classList.add('copied'); }
+    toast(b.id === 'dt-copyall' ? 'Copied everything.' : `Copied part ${+b.dataset.part + 1}.`);
+  } catch { toast('Your browser blocked copying. Try the button again.'); }
+});
 
 function openPromptDlg() {
   $('#dp-text').value = notesPrompt();
